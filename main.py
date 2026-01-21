@@ -1,358 +1,162 @@
 import os
-import re
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
-# ============================================
-# CONFIGURATION - USING ENVIRONMENT VARIABLES
-# ============================================
-
-# Get values from environment variables (secure!)
+# --- CONFIGURATION ---
+# Load environment variables
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-CALENDLY_LINK = os.environ.get("CALENDLY_LINK", "https://calendly.com/mayank-cleverviral/30min")
-NOTION_FORM_LINK = os.environ.get("NOTION_FORM_LINK", "https://cleverviral.notion.site/2ef95faff36c80a29755e31b12bd5e9a?pvs=105")
-HANDOFF_TEAM_MEMBER = os.environ.get("HANDOFF_TEAM_MEMBER", "@Mayank M")
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+CALENDLY_LINK = os.environ.get("CALENDLY_LINK", "https://calendly.com/your-link")
+NOTION_FORM_LINK = os.environ.get("NOTION_FORM_LINK", "https://notion.so/your-form")
+HANDOFF_TEAM_MEMBER_ID = os.environ.get("HANDOFF_TEAM_MEMBER_ID", "UXXXXXXXX") # Replace with actual Member ID
 
-# ============================================
-# FAQ KNOWLEDGE BASE
-# ============================================
+# --- INITIALIZATION ---
 
-FAQ_RESPONSES = {
-    "login": """To access your dashboard:
-1. Go to gtm.cleverviral.co
-2. Use the email invite we sent
-3. Check your inbox for login credentials
+# Initializes your app with your bot token and signing secret
+bot = App(
+    token=SLACK_BOT_TOKEN,
+    signing_secret=SLACK_SIGNING_SECRET
+)
 
-If you're having trouble logging in, let me know and I'll help!""",
+# Initialize Flask app
+app = Flask(__name__)
 
-    "master inbox": """To access and respond to leads via Master Inbox:
-1. Login to gtm.cleverviral.co
-2. Click 'Master Inbox' in the left menu
-3. You'll see all positive replies here
-4. Click any conversation to respond directly
+# Create a handler for Slack events
+handler = SlackRequestHandler(bot)
 
-The Master Inbox is your central hub for managing all lead responses!""",
-
-    "dashboard": """Your Campaign Dashboard shows:
-• Active campaigns and their status
-• Reply statistics (positive/neutral/negative)
-• Response rates and EPR metrics
-• Lead quality insights
-• Campaign performance trends
-
-Access it anytime at: gtm.cleverviral.co/dashboard""",
-
-    "positive reply": """Positive replies include:
-• 'Yes, interested'
-• 'Tell me more'
-• 'Let's schedule a call'
-• Meeting requests
-• Questions about your service
-• Requests for case studies or demos
-
-You'll see these in your Master Inbox and get notifications in your live_responses channel!""",
-
-    "how to respond": """To respond to a positive lead:
-1. Go to gtm.cleverviral.co and login
-2. Navigate to Master Inbox
-3. Click on the conversation
-4. Type your response
-5. Click Send
-
-The system will CC your email so you can continue the conversation from your primary inbox if needed.""",
-
-    "reporting": """You receive updates on:
-• Weekly campaign launch updates (Mondays 9am ET)
-• Weekly performance summaries (Fridays 5pm ET)
-• Monthly detailed reports (1st of month)
-
-All reports are posted right here in Slack, plus you can access live reports in the dashboard anytime!""",
-
-    "campaign performance": """To check campaign performance:
-1. Login to gtm.cleverviral.co
-2. View the live report link shared in Slack
-3. Check the monthly report (shared 1st of each month)
-
-Key metrics include:
-• Email sends
-• Reply rate
-• Positive reply rate (EPR)
-• Campaign-specific performance
-
-If you'd like a detailed breakdown, just ask!""",
-
-    "new campaign": """To submit a new campaign idea:
-1. Type /new-campaign in this channel
-2. Fill out the Notion form with:
-   • Target audience/ICP
-   • Campaign objectives
-   • Messaging direction
-   • Timeline expectations
-
-We typically launch new campaigns within 3-5 business days after submission!""",
-
-    "deliverability": """We monitor deliverability closely and take proactive steps:
-• Regular inbox infrastructure updates
-• AI spam filter optimization
-• Bounce rate monitoring
-• Reply rate tracking
-
-If you notice any issues with email delivery, we're on it! Our team constantly maintains and optimizes the infrastructure to ensure maximum deliverability.""",
-
-    "response time": """Our typical response times:
-• General questions: Within 4 hours (business hours)
-• Technical issues: Within 2 hours
-• Campaign requests: 3-5 business days
-• Urgent matters: Tag us with @team and we'll prioritize!
-
-We're in IST timezone but monitor Slack throughout the day.""",
-
-    "meeting": """To book a meeting with us:
-• Just ask to schedule a call in this channel
-• Or use our Calendly link: https://calendly.com/mayank-cleverviral/30min
-• Pick a time that works for you
-
-We're happy to discuss strategy, performance, or answer any questions!""",
-
-    "negative replies": """We handle negative replies automatically:
-• 'Not interested' responses are tracked but not re-engaged
-• Unsubscribe requests are honored immediately
-• Angry responses are flagged for team review
-
-Negative replies help us refine targeting and messaging over time.""",
-
-    "dnc": """DNC (Do Not Contact) list updates:
-• We request updated lists monthly
-• Submit your DNC list via the form we send
-• We exclude these contacts immediately
-• Helps maintain deliverability and reputation
-
-If you have contacts to add to DNC, share them anytime!""",
-
-    "infrastructure": """Our infrastructure includes:
-• Multiple email sending platforms
-• Regular inbox warmup and rotation
-• Private SMTP servers for better control
-• AI-optimized messaging for spam filters
-
-We continuously upgrade infrastructure to maintain high deliverability rates.""",
-
-    "channels": """You have access to 2 Slack channels:
-
-1. **[clientname]_cleverviral** (this channel)
-   • Team communication
-   • Campaign discussions
-   • Questions and support
-   • Performance updates
-
-2. **[clientname]_live_responses**
-   • Real-time positive lead notifications
-   • See leads as they come in
-   • Quick response monitoring
-
-All updates and notifications happen in these channels!""",
-
-    "help": """I can help you with:
-• Login and dashboard access
-• Understanding your Master Inbox
-• Campaign performance and metrics
-• Scheduling calls with the team
-• Submitting new campaign ideas (/new-campaign)
-• General questions about the process
-
-Just ask your question, and I'll do my best to help! If I can't answer, I'll loop in the team immediately."""
+# --- DATA (FAQs) ---
+# Using a simple dictionary for FAQs. For a real-world scenario, you might use a database or a file.
+faq_responses = {
+    "login": "You can log in to the CleverViral dashboard at gtm.cleverviral.co. You should have received an invite via email to set up your account.",
+    "dashboard": "The Campaign Dashboard provides a real-time overview of your campaign performance, including sends, opens, clicks, and replies.",
+    "master inbox": "The Master Inbox is where you can view and reply to all positive leads from your campaigns. You can access it via the main dashboard at gtm.cleverviral.co.",
+    "campaign launch": "New campaigns are typically launched within 3-5 business days after the strategy is finalized. We will notify you here in the '#[client]_cleverviral' channel once it's live.",
+    "reporting": "You will receive weekly performance TL;DRs in this channel every Friday and a detailed monthly report via email at the beginning of each month.",
+    "leads": "Positive replies from potential leads are funneled into the Master Inbox. You'll also get a real-time notification in the '#[client]_live_responses' channel for each positive reply.",
+    "pause campaign": "To pause a campaign, please let us know which campaign you'd like to pause, and we will deactivate it. Please allow up to 24 hours for this change to take effect.",
+    "target audience": "We define the target audience based on the Ideal Customer Profile (ICP) we established during onboarding. If you want to suggest a new audience, feel free to use the `/new-campaign` command.",
+    "copywriting": "All email copy is written by our team and goes through a rigorous internal review process. We typically share the copy direction with you before launching a new angle.",
+    "billing": "For any questions regarding billing or your subscription, please contact your account manager directly or email billing@cleverviral.co.",
+    "meeting": f"Of course! You can book a time with us using this link: {CALENDLY_LINK}",
+    "call": f"Happy to connect! Please book a time that works for you here: {CALENDLY_LINK}",
+    "schedule": f"Let's find a time. You can view our availability and book a slot here: {CALENDLY_LINK}",
+    "connect": f"Sounds good. Please grab a time on our calendar: {CALENDLY_LINK}",
+    "idea": f"That's great! To ensure we capture all the details for a new campaign idea, please use the `/new-campaign` command. It will give you a form to fill out."
 }
 
-# Keywords that trigger calendar sharing
-MEETING_KEYWORDS = ["call", "meeting", "schedule", "connect", "talk", "discuss", "zoom", "meet"]
+# --- SLACK EVENT HANDLERS ---
 
-# ============================================
-# SLACK BOT SETUP
-# ============================================
-
-app = App(token=SLACK_BOT_TOKEN)
-flask_app = Flask(__name__)
-handler = SlackRequestHandler(app)
-
-# ============================================
-# FEATURE 1: WELCOME MESSAGES
-# ============================================
-
-@app.event("member_joined_channel")
-def handle_member_joined(event, say, client):
-    """Send welcome message when new member joins"""
-    
+# Welcome message for new members
+@bot.event("member_joined_channel")
+def welcome_message(event, say):
     user_id = event["user"]
     channel_id = event["channel"]
-    
-    # Get channel info to determine which message to send
-    channel_info = client.conversations_info(channel=channel_id)
-    channel_name = channel_info["channel"]["name"]
-    
-    # Get user info for personalization
-    user_info = client.users_info(user=user_id)
-    user_name = user_info["user"]["real_name"]
-    
-    # Determine message based on channel type
+    channel_name = ""
+
+    # Fetch channel info to get the name
+    try:
+        channel_info = bot.client.conversations_info(channel=channel_id)
+        if channel_info["ok"]:
+            channel_name = channel_info["channel"]["name"]
+    except Exception as e:
+        print(f"Error fetching channel info: {e}")
+        return
+
+    # Customize message based on the channel
     if "live_responses" in channel_name:
-        message = f"""Hey <@{user_id}>! 👋
-
-Welcome to the **Live Responses** channel!
-
-This is where you'll see all the **positive replies** from your email campaigns in real-time. 
-
-**To respond to leads:**
-1. Login to gtm.cleverviral.co
-2. Go to "Master Inbox"
-3. Click on any conversation to reply
-
-You'll get notifications here whenever someone shows interest! 🎯"""
+        text = f"Welcome <@{user_id}>! This channel is for real-time notifications of all positive replies from our campaigns. You can monitor lead activity here."
+    else:
+        text = (
+            f"Welcome <@{user_id}>! This is your primary communication channel with the CleverViral team. "
+            f"Here we'll discuss strategy, share updates, and collaborate on your campaigns.\n\n"
+            f"A few quick links to get you started:\n"
+            f"• Access your Dashboard & Master Inbox: https://gtm.cleverviral.co\n"
+            f"• To suggest a new campaign, just type `/new-campaign`"
+        )
     
-    else:  # Main cleverviral channel
-        message = f"""Hey <@{user_id}>! 👋
+    say(text=text)
 
-Welcome to your CleverViral team channel!
-
-**This channel is for:**
-• Campaign discussions & feedback
-• Sharing copy ideas
-• Performance updates
-• Questions & support
-
-**Quick links:**
-• Dashboard: gtm.cleverviral.co
-• Master Inbox: gtm.cleverviral.co/inbox
-• New Campaign: Type `/new-campaign`
-• Schedule Call: Just ask to connect!
-
-I'm your CX bot - ask me anything! 🤖"""
-    
-    say(text=message, channel=channel_id)
-
-# ============================================
-# FEATURE 2: BASIC FAQ
-# ============================================
-
-def find_faq_match(message_text):
-    """Check if message matches any FAQ keyword"""
-    message_lower = message_text.lower()
-    
-    # Check each FAQ keyword
-    for keyword, response in FAQ_RESPONSES.items():
-        if keyword in message_lower:
-            return response
-    
-    return None
-
-# ============================================
-# FEATURE 3: CALENDAR SHARING
-# ============================================
-
-def should_share_calendar(message_text):
-    """Check if message contains meeting-related keywords"""
-    message_lower = message_text.lower()
-    return any(keyword in message_lower for keyword in MEETING_KEYWORDS)
-
-# ============================================
-# FEATURE 4: CAMPAIGN FORM (Slash Command)
-# ============================================
-
-@app.command("/new-campaign")
-def handle_new_campaign(ack, say, command):
-    """Handle /new-campaign slash command"""
-    ack()  # Acknowledge the command
-    
-    user_id = command["user_id"]
-    
-    message = f"""Hey <@{user_id}>! 🚀
-
-Ready to launch a new campaign? Please fill out this form with your campaign details:
-
-👉 {NOTION_FORM_LINK}
-
-**What we need:**
-• Target audience/ICP
-• Campaign objectives
-• Messaging direction
-• Timeline expectations
-
-Once submitted, we'll review and get back to you within 3-5 business days!"""
-    
-    say(text=message, channel=command["channel_id"])
-
-# ============================================
-# FEATURE 5 & 6: MESSAGE HANDLER (FAQ + Handoff)
-# ============================================
-
-@app.message(re.compile(".*"))
+# Respond to messages containing keywords (FAQs)
+@bot.message(".*")
 def handle_message(message, say):
-    """Process all channel messages for FAQ and calendar triggers"""
+    user_message = message["text"].lower()
     
-    # Ignore bot's own messages
-    if message.get("bot_id"):
-        return
+    # Find a matching FAQ keyword
+    for keyword, response in faq_responses.items():
+        if keyword in user_message:
+            say(text=response, thread_ts=message["ts"])
+            return # Stop after the first match
+
+    # If no keyword is found, handoff to a human
+    # This part is simple now, could be improved with sentiment analysis in V2
+    # Avoids replying to its own messages or other bot messages
+    if "bot_id" not in message:
+        handoff_text = (
+            f"I'm not sure how to answer that. Let me loop in the team for you. "
+            f"<@{HANDOFF_TEAM_MEMBER_ID}> will get back to you shortly."
+        )
+        say(text=handoff_text, thread_ts=message["ts"])
+
+
+# --- SLACK COMMAND HANDLERS ---
+
+@bot.command("/new-campaign")
+def handle_new_campaign(ack, body, say):
+    ack()
+    user_id = body["user_id"]
+    text = (
+        f"Hi <@{user_id}>! That's great you have a new idea. To make sure we capture all the necessary details, "
+        f"please fill out this brief form:\n{NOTION_FORM_LINK}"
+    )
+    say(text=text)
+
+
+# --- N8N WEBHOOK ENDPOINT (FOR V1 TRANSCRIPT SUMMARY) ---
+# This endpoint will be called by your N8N workflow
+
+@app.route("/n8n/transcript-summary", methods=["POST"])
+def n8n_transcript_summary():
+    data = request.json
     
-    message_text = message.get("text", "")
-    channel_id = message["channel"]
-    user_id = message["user"]
-    
-    # Check for FAQ match first
-    faq_response = find_faq_match(message_text)
-    if faq_response:
-        say(text=faq_response, channel=channel_id)
-        return
-    
-    # Check if should share calendar
-    if should_share_calendar(message_text):
-        calendar_message = f"""Happy to connect! 📅
+    # Ensure data from N8N is valid
+    if not data or "summary" not in data or "channel" not in data:
+        return jsonify({"status": "error", "message": "Invalid payload. 'summary' and 'channel' are required."}, 400)
 
-Here's my calendar - pick a time that works for you:
-{CALENDLY_LINK}
+    summary = data["summary"]
+    target_channel = data["channel"] # e.g., "testclient-cxcleverviral"
 
-Looking forward to chatting!"""
-        say(text=calendar_message, channel=channel_id)
-        return
-    
-    # If message seems like a question but no FAQ match, trigger human handoff
-    if "?" in message_text or any(word in message_text.lower() for word in ["help", "issue", "problem", "not working"]):
-        handoff_message = f"""Got it! Let me loop in the team to help with that.
+    try:
+        # Post the summary to the specified Slack channel
+        bot.client.chat_postMessage(
+            channel=target_channel,
+            text=f"📄 Here's a summary of the recent client call:\n\n{summary}"
+        )
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        print(f"Error posting to Slack: {e}")
+        return jsonify({"status": "error", "message": f"Failed to post to Slack: {e}"}), 500
 
-{HANDOFF_TEAM_MEMBER} - could you assist <@{user_id}> with their question? 🙏
+# --- FLASK APP ROUTES ---
 
-We'll get back to you ASAP!"""
-        say(text=handoff_message, channel=channel_id)
-
-# ============================================
-# FLASK ROUTES FOR SLACK EVENTS
-# ============================================
-
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    """Handle Slack events"""
-    return handler.handle(request)
-
-@flask_app.route("/slack/commands", methods=["POST"])
-def slack_commands():
-    """Handle Slack slash commands"""
-    return handler.handle(request)
-
-@flask_app.route("/health", methods=["GET"])
+# Health check endpoint
+@app.route("/health", methods=["GET"])
 def health_check():
-    """Health check endpoint"""
     return "Bot is running! 🤖", 200
 
-@flask_app.route("/", methods=["GET"])
-def home():
-    """Home route"""
-    return "CleverViral CX Bot is alive! 🤖✅", 200
+# Entry point for all Slack events
+@app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
 
-# ============================================
-# RUN THE BOT
-# ============================================
+# Entry point for all Slack commands
+@app.route("/slack/commands", methods=["POST"])
+def slack_commands():
+    return handler.handle(request)
 
+
+# --- APP STARTUP ---
 if __name__ == "__main__":
-    print("🤖 CleverViral CX Bot is starting...")
-    print("✅ Bot is ready and listening for events!")
+    # The port is important for Render
     port = int(os.environ.get("PORT", 3000))
-    flask_app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port)
