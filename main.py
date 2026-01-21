@@ -104,27 +104,57 @@ def has_team_replied_in_thread(channel_id, thread_ts):
 def get_thread_key(channel_id, thread_ts):
     return f"{channel_id}:{thread_ts}"
 
-def is_actual_question(message_text):
+def is_needs_response(message_text):
     """
-    Determine if message is ACTUALLY a question
-    Not just a statement with keywords
+    Determine if message needs a response
+    Includes: questions, complaints, concerns, requests
+    Excludes: short acknowledgments, thanks, casual chat
     """
     message_lower = message_text.lower().strip()
     
-    # Must have question mark OR question words
-    has_question_mark = "?" in message_text
+    # Short acknowledgments that don't need responses
+    short_acks = [
+        "thanks", "thank you", "ty", "thx",
+        "ok", "okay", "k",
+        "got it", "sounds good", "perfect", "great", "nice",
+        "yes", "no", "yep", "nope", "sure"
+    ]
     
-    # Question starter words
+    # If message is just a short acknowledgment, don't respond
+    if message_lower in short_acks:
+        return False
+    
+    # If very short (under 10 chars) and no question mark, probably not meaningful
+    if len(message_text) < 10 and "?" not in message_text:
+        return False
+    
+    # Questions - always respond
+    has_question_mark = "?" in message_text
     question_starters = [
         "how", "what", "when", "where", "why", "who", "which",
         "can you", "could you", "would you", "do you", "does", "did",
         "is there", "are there", "will you", "have you", "has",
-        "am i", "are we", "is it", "should i", "should we"
+        "am i", "are we", "is it", "should i", "should we", "can we", "can i"
     ]
-    
     starts_with_question = any(message_lower.startswith(starter) for starter in question_starters)
     
-    return has_question_mark or starts_with_question
+    # Complaints/concerns - always respond
+    concern_words = [
+        "bad", "terrible", "awful", "trash", "horrible", "poor",
+        "not working", "broken", "issue", "problem", "concerned",
+        "worried", "disappointing", "disappointed", "frustrated",
+        "low", "down", "dropping", "declined", "worse"
+    ]
+    has_concern = any(word in message_lower for word in concern_words)
+    
+    # Requests - always respond
+    request_phrases = [
+        "need to", "want to", "would like", "can we", "could we",
+        "let's", "we should", "please", "help"
+    ]
+    has_request = any(phrase in message_lower for phrase in request_phrases)
+    
+    return has_question_mark or starts_with_question or has_concern or has_request
 
 # ============================================
 # FAQ RESPONSES - ACTUAL QUESTIONS ONLY
@@ -142,7 +172,7 @@ FAQ_DATABASE = [
             "how to see campaign performance",
             "where are the metrics"
         ],
-        "answer": "You can see reporting in a few ways:\n• Weekly performance summaries posted here every Friday\n• Monthly detailed reports on the 1st of each month\n• Live reports via the Google Sheets link we share\n\nWant access to the live dashboard or need specific numbers? The team can help!",
+        "answer": "You can see reporting in a few ways:\n• Weekly summaries posted here every Friday\n• Monthly reports on the 1st of each month\n• Live reports via the Google Sheets link we share\n\nWant specific numbers? The team can pull exact data.",
         "category": "campaigns"
     },
     {
@@ -157,7 +187,7 @@ FAQ_DATABASE = [
             "need login credentials",
             "dashboard login"
         ],
-        "answer": "For dashboard access issues:\n• Check your email for the original login credentials\n• Make sure you're using the correct dashboard URL\n• Try resetting your password\n\nThe team can resend credentials or help you get access!",
+        "answer": "For dashboard access:\n• Check your email for login credentials\n• Make sure you're using the correct URL\n• Try resetting your password\n\nThe team can resend credentials or help you get in.",
         "category": "general"
     },
     {
@@ -169,7 +199,7 @@ FAQ_DATABASE = [
             "email send count",
             "how many sent this month"
         ],
-        "answer": "Email send volumes are included in:\n• Weekly summaries (posted Fridays)\n• Monthly reports (1st of month)\n• The live Google Sheets report\n\nWant the current count? The team can pull exact numbers for you!",
+        "answer": "Email volumes are in:\n• Weekly summaries (Fridays)\n• Monthly reports (1st of month)\n• Live Google Sheets report\n\nWant the current count? Team can pull exact numbers.",
         "category": "campaigns"
     },
     {
@@ -181,7 +211,7 @@ FAQ_DATABASE = [
             "response rate low",
             "why so few positives"
         ],
-        "answer": "Low response rates can happen due to several factors:\n• List quality and targeting\n• Messaging and positioning\n• Deliverability issues\n• Industry/timing seasonality\n\nThe team will analyze your specific campaign and identify what to optimize!",
+        "answer": "Low response rates can happen due to:\n• List quality and targeting\n• Messaging fit\n• Deliverability issues\n• Timing/seasonality\n\nThe team will analyze your campaign and identify what to optimize.",
         "category": "campaigns"
     },
     {
@@ -193,7 +223,7 @@ FAQ_DATABASE = [
             "when will it begin",
             "how long until launch"
         ],
-        "answer": "New campaigns typically launch within 3-5 business days after strategy is finalized. We'll notify you right here in this channel once it's live!",
+        "answer": "New campaigns typically launch within 3-5 business days after strategy is finalized. We'll notify you here once it's live.",
         "category": "campaigns"
     },
     {
@@ -205,7 +235,7 @@ FAQ_DATABASE = [
             "where is master inbox",
             "how to access inbox"
         ],
-        "answer": "To respond to positive leads:\n1. Access your Master Inbox via the dashboard\n2. All positive replies are automatically funneled there\n3. Click any conversation to reply directly\n\nYou can also respond from your email when we CC you on replies!",
+        "answer": "To respond to leads:\n1. Access Master Inbox via dashboard\n2. All positive replies show up there\n3. Click any conversation to reply\n\nYou can also respond from your email when we CC you.",
         "category": "campaigns"
     },
     {
@@ -217,7 +247,7 @@ FAQ_DATABASE = [
             "stop sending",
             "deactivate campaign"
         ],
-        "answer": "To pause a campaign, just let the team know which specific campaign you'd like to pause. We'll deactivate it within 24 hours and confirm here!",
+        "answer": "To pause a campaign, let the team know which one. We'll deactivate it within 24 hours and confirm here.",
         "category": "campaigns"
     },
     {
@@ -229,7 +259,7 @@ FAQ_DATABASE = [
             "target different people",
             "who should we reach"
         ],
-        "answer": "We target based on the ICP established during onboarding. Want to refine targeting or test a new audience? Use the `/new-campaign` command or discuss with the team!",
+        "answer": "We target based on the ICP from onboarding. Want to refine targeting or test a new audience? Use `/new-campaign` or discuss with the team.",
         "category": "targeting"
     },
     {
@@ -241,7 +271,7 @@ FAQ_DATABASE = [
             "different copy",
             "revise the emails"
         ],
-        "answer": "All email copy is written and reviewed by our team. Want to test new messaging or update copy? The team can walk you through the process and implement changes!",
+        "answer": "All copy is written and reviewed by our team. Want to test new messaging? The team can walk you through the process and implement changes.",
         "category": "copy"
     },
     {
@@ -253,25 +283,20 @@ FAQ_DATABASE = [
             "emails not delivered",
             "spam folder"
         ],
-        "answer": "We actively monitor deliverability with regular infrastructure updates and optimization. If you're noticing delivery issues, the team will investigate immediately and make adjustments!",
+        "answer": "We actively monitor deliverability with regular infrastructure updates. If you're seeing delivery issues, the team will investigate and make adjustments.",
         "category": "deliverability"
     }
 ]
 
 def find_faq_match(message_text):
-    """
-    Match message to FAQ - ONLY if it's actually a question
-    """
-    # First check: Is this even a question?
-    if not is_actual_question(message_text):
+    """Match message to FAQ - ONLY if it needs a response"""
+    if not is_needs_response(message_text):
         return None
     
     message_lower = message_text.lower()
     
-    # Check each FAQ's question patterns
     for faq in FAQ_DATABASE:
         for pattern in faq["question_patterns"]:
-            # Check if the pattern is in the question
             if pattern in message_lower:
                 return {
                     "answer": faq["answer"],
@@ -280,53 +305,73 @@ def find_faq_match(message_text):
     
     return None
 
-# Meeting keywords
+# Meeting keywords - EXPANDED for better matching
 MEETING_KEYWORDS = [
+    # Core meeting words
     "call", "meeting", "schedule", "connect", "talk", "discuss",
-    "zoom", "meet", "chat", "catch up", "sync", "block time",
-    "block a time", "find time", "available", "free time", "calendly",
-    "book", "booking", "appointment", "slot", "when can we", "can we meet",
-    "let's talk", "get on a call", "hop on", "quick call", "quick chat"
+    "zoom", "meet", "chat", "catch up", "sync",
+    
+    # Time blocking phrases
+    "block time", "block a time", "block some time", "grab time", 
+    "grab some time", "find time", "find a time", "find some time",
+    "carve out time", "set aside time",
+    
+    # Availability
+    "available", "free time", "when are you free", "when can we",
+    
+    # Booking/scheduling
+    "book", "booking", "appointment", "slot", "calendly",
+    
+    # Action phrases  
+    "can we meet", "let's talk", "get on a call", "hop on", 
+    "quick call", "quick chat", "quick sync", "touch base"
 ]
 
 # ============================================
-# WELCOME MESSAGES
+# ONBOARDING COMMANDS (MANUAL, TEAM ONLY)
 # ============================================
 
-@bot.event("member_joined_channel")
-def welcome_message(event, say):
-    user_id = event["user"]
-    channel_id = event["channel"]
+@bot.command("/pip-onboard")
+def handle_onboard_main(ack, say, command):
+    """Team uses this to send main channel welcome"""
+    ack()
     
-    if is_internal_team_member(user_id):
+    # Only team members can use this
+    user_id = command["user_id"]
+    if not is_internal_team_member(user_id):
+        say("This command is only available to the CleverViral team.", ephemeral=True)
         return
     
-    try:
-        channel_info = bot.client.conversations_info(channel=channel_id)
-        if not channel_info["ok"]:
-            return
-        channel_name = channel_info["channel"]["name"]
-    except Exception as e:
-        print(f"Error fetching channel info: {e}")
+    calendly_link = format_link(CALENDLY_LINK, "book a call")
+    text = (
+        f"Welcome.\n\n"
+        f"This is your primary channel with the CleverViral team. "
+        f"We'll discuss strategy, share updates, and collaborate on campaigns here.\n\n"
+        f"**Quick actions:**\n"
+        f"• Need a new campaign? Use `/new-campaign`\n"
+        f"• Want to {calendly_link} with the team\n\n"
+        f"I'm Pip. Ask me anything you need."
+    )
+    
+    say(text=text)
+
+@bot.command("/pip-onboard-live")
+def handle_onboard_live(ack, say, command):
+    """Team uses this to send live_responses welcome"""
+    ack()
+    
+    # Only team members can use this
+    user_id = command["user_id"]
+    if not is_internal_team_member(user_id):
+        say("This command is only available to the CleverViral team.", ephemeral=True)
         return
     
-    if "live_responses" in channel_name or "live-responses" in channel_name:
-        text = (
-            f"Welcome <@{user_id}>! 👋\n\n"
-            f"This channel is for **real-time notifications** of all positive replies from your campaigns. "
-            f"You can respond to leads via your Master Inbox."
-        )
-    else:
-        calendly_link = format_link(CALENDLY_LINK, "book a call")
-        text = (
-            f"Welcome <@{user_id}>! 👋\n\n"
-            f"This is your primary communication channel with the CleverViral team. "
-            f"We'll discuss strategy, share updates, and collaborate on campaigns here.\n\n"
-            f"**Quick actions:**\n"
-            f"• To suggest a new campaign: `/new-campaign`\n"
-            f"• To {calendly_link} with the team\n\n"
-            f"I'm Pip, your CleverViral assistant - ask me anything! 🐦"
-        )
+    text = (
+        f"Welcome.\n\n"
+        f"This channel shows real-time notifications of positive replies from your campaigns. "
+        f"You can respond to leads via your Master Inbox (accessible from your dashboard).\n\n"
+        f"We'll notify you here whenever someone shows interest."
+    )
     
     say(text=text)
 
@@ -365,9 +410,9 @@ def handle_message(message, say, client):
             handled_threads.add(thread_key)
             return
     
-    # CRITICAL: Only proceed if this is actually a question
-    if not is_actual_question(message_text):
-        print(f"Not a question, ignoring: {message_text[:50]}")
+    # CRITICAL: Only proceed if this needs a response
+    if not is_needs_response(message_text):
+        print(f"Doesn't need response, ignoring: {message_text[:50]}")
         return
     
     # React with hourglass
@@ -385,14 +430,19 @@ def handle_message(message, say, client):
     # Detect question type for routing
     team_member_id, question_category = detect_question_type(message_text)
     
-    # Check for meeting keywords FIRST
+    # Check for meeting keywords FIRST (before FAQ)
     message_lower = message_text.lower()
-    if any(keyword in message_lower for keyword in MEETING_KEYWORDS):
+    
+    # Better keyword matching - check if ANY keyword is in message
+    is_meeting_request = False
+    for keyword in MEETING_KEYWORDS:
+        if keyword in message_lower:
+            is_meeting_request = True
+            break
+    
+    if is_meeting_request:
         calendly_link = format_link(CALENDLY_LINK, "here")
-        text = (
-            f"Got it <@{user_id}>! 📅\n\n"
-            f"You can book a time {calendly_link}. Looping in <@{team_member_id}> as well!"
-        )
+        text = f"Hey <@{user_id}>, grab a time {calendly_link}. Looping in <@{team_member_id}> as well."
         
         try:
             client.reactions_remove(channel=channel_id, timestamp=message_ts, name="hourglass_flowing_sand")
@@ -416,10 +466,7 @@ def handle_message(message, say, client):
                     team_member_id = cat_config["team_member"]
                     break
         
-        text = (
-            f"{answer}\n\n"
-            f"Looping in <@{team_member_id}> to provide any additional details! 👍"
-        )
+        text = f"Hey <@{user_id}>,\n\n{answer}\n\nLooping in <@{team_member_id}> on this one."
         
         try:
             client.reactions_remove(channel=channel_id, timestamp=message_ts, name="hourglass_flowing_sand")
@@ -431,10 +478,7 @@ def handle_message(message, say, client):
         return
     
     # No FAQ match - escalate
-    text = (
-        f"Got it <@{user_id}>! 👍\n\n"
-        f"Looping in <@{team_member_id}> to answer this one."
-    )
+    text = f"Hey <@{user_id}>, looping in <@{team_member_id}> on this one."
     
     try:
         client.reactions_remove(channel=channel_id, timestamp=message_ts, name="hourglass_flowing_sand")
@@ -453,11 +497,10 @@ def handle_new_campaign(ack, body, say):
     ack()
     user_id = body["user_id"]
     
-    form_link = format_link(NOTION_FORM_LINK, "this campaign form")
+    form_link = format_link(NOTION_FORM_LINK, "this brief form")
     text = (
-        f"Hey <@{user_id}>! 🚀\n\n"
-        f"Great idea! Please fill out {form_link} with your campaign details. "
-        f"We'll review and get back to you within 3-5 business days!"
+        f"Sounds like a start of a great idea. To make sure we capture all the necessary details, "
+        f"please fill out {form_link}. We'll review and get back to you within 3-5 business days."
     )
     say(text=text)
 
@@ -491,7 +534,7 @@ def n8n_transcript_summary():
 
 @app.route("/health", methods=["GET"])
 def health_check():
-    return "Pip is running! 🐦", 200
+    return "Pip is running 🐦", 200
 
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
@@ -507,7 +550,7 @@ def slack_commands():
 
 if __name__ == "__main__":
     print("🐦 Pip is starting...")
-    print("✅ Pip is ready and listening!")
+    print("✅ Pip is ready")
     
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
