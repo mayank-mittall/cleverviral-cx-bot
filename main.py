@@ -325,7 +325,7 @@ def welcome_message(event, say):
             f"**Quick actions:**\n"
             f"• To suggest a new campaign: `/new-campaign`\n"
             f"• To {calendly_link} with the team\n\n"
-            f"I'm your CX bot - ask me anything! 🤖"
+            f"I'm Pip, your CleverViral assistant - ask me anything! 🐦"
         )
     
     say(text=text)
@@ -491,7 +491,7 @@ def n8n_transcript_summary():
 
 @app.route("/health", methods=["GET"])
 def health_check():
-    return "Bot is running! 🤖", 200
+    return "Pip is running! 🐦", 200
 
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
@@ -506,8 +506,8 @@ def slack_commands():
 # ============================================
 
 if __name__ == "__main__":
-    print("🤖 CleverViral CX Bot is starting...")
-    print("✅ Bot is ready and listening for events!")
+    print("🐦 Pip is starting...")
+    print("✅ Pip is ready and listening!")
     
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
