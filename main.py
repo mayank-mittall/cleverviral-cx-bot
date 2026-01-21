@@ -1,162 +1,513 @@
 import os
+import re
 from slack_bolt import App
 from slack_bolt.adapter.flask import SlackRequestHandler
 from flask import Flask, request, jsonify
 
-# --- CONFIGURATION ---
-# Load environment variables
+# ============================================
+# CONFIGURATION
+# ============================================
+
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
 SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
-CALENDLY_LINK = os.environ.get("CALENDLY_LINK", "https://calendly.com/your-link")
-NOTION_FORM_LINK = os.environ.get("NOTION_FORM_LINK", "https://notion.so/your-form")
-HANDOFF_TEAM_MEMBER_ID = os.environ.get("HANDOFF_TEAM_MEMBER_ID", "UXXXXXXXX") # Replace with actual Member ID
+CALENDLY_LINK = os.environ.get("CALENDLY_LINK", "https://calendly.com/mayank-cleverviral/30min")
+NOTION_FORM_LINK = os.environ.get("NOTION_FORM_LINK", "https://cleverviral.notion.site/2ef95faff36c80a29755e31b12bd5e9a?pvs=105")
 
-# --- INITIALIZATION ---
+# Team member IDs
+TEAM_MEMBERS = {
+    "hassan": "U04Q9SG853P",
+    "rish": "U046PBV7QBT",
+    "sahil": "U07RMKN25MY",
+    "chetan": "U06RX4KQ8LX",
+    "suraj": "U04UR5DBFGT",
+}
 
-# Initializes your app with your bot token and signing secret
+INTERNAL_TEAM_IDS = list(TEAM_MEMBERS.values())
+DEFAULT_HANDOFF = TEAM_MEMBERS["hassan"]
+
+# ============================================
+# INITIALIZATION
+# ============================================
+
 bot = App(
     token=SLACK_BOT_TOKEN,
     signing_secret=SLACK_SIGNING_SECRET
 )
 
-# Initialize Flask app
 app = Flask(__name__)
-
-# Create a handler for Slack events
 handler = SlackRequestHandler(bot)
+handled_threads = set()
 
-# --- DATA (FAQs) ---
-# Using a simple dictionary for FAQs. For a real-world scenario, you might use a database or a file.
-faq_responses = {
-    "login": "You can log in to the CleverViral dashboard at gtm.cleverviral.co. You should have received an invite via email to set up your account.",
-    "dashboard": "The Campaign Dashboard provides a real-time overview of your campaign performance, including sends, opens, clicks, and replies.",
-    "master inbox": "The Master Inbox is where you can view and reply to all positive leads from your campaigns. You can access it via the main dashboard at gtm.cleverviral.co.",
-    "campaign launch": "New campaigns are typically launched within 3-5 business days after the strategy is finalized. We will notify you here in the '#[client]_cleverviral' channel once it's live.",
-    "reporting": "You will receive weekly performance TL;DRs in this channel every Friday and a detailed monthly report via email at the beginning of each month.",
-    "leads": "Positive replies from potential leads are funneled into the Master Inbox. You'll also get a real-time notification in the '#[client]_live_responses' channel for each positive reply.",
-    "pause campaign": "To pause a campaign, please let us know which campaign you'd like to pause, and we will deactivate it. Please allow up to 24 hours for this change to take effect.",
-    "target audience": "We define the target audience based on the Ideal Customer Profile (ICP) we established during onboarding. If you want to suggest a new audience, feel free to use the `/new-campaign` command.",
-    "copywriting": "All email copy is written by our team and goes through a rigorous internal review process. We typically share the copy direction with you before launching a new angle.",
-    "billing": "For any questions regarding billing or your subscription, please contact your account manager directly or email billing@cleverviral.co.",
-    "meeting": f"Of course! You can book a time with us using this link: {CALENDLY_LINK}",
-    "call": f"Happy to connect! Please book a time that works for you here: {CALENDLY_LINK}",
-    "schedule": f"Let's find a time. You can view our availability and book a slot here: {CALENDLY_LINK}",
-    "connect": f"Sounds good. Please grab a time on our calendar: {CALENDLY_LINK}",
-    "idea": f"That's great! To ensure we capture all the details for a new campaign idea, please use the `/new-campaign` command. It will give you a form to fill out."
+# ============================================
+# QUESTION TYPE ROUTING
+# ============================================
+
+QUESTION_ROUTING = {
+    "campaigns": {
+        "team_member": TEAM_MEMBERS["hassan"],
+        "keywords": ["campaign", "send", "sending", "performance", "report", "results", "metrics", "epr", "positive reply", "reply rate", "statistics", "stats"]
+    },
+    "copy": {
+        "team_member": TEAM_MEMBERS["rish"],
+        "keywords": ["copy", "copywriting", "messaging", "email copy", "subject line", "strategy", "approach", "angle", "value prop"]
+    },
+    "targeting": {
+        "team_member": TEAM_MEMBERS["sahil"],
+        "keywords": ["data", "targeting", "audience", "icp", "leads", "list", "contacts", "prospects"]
+    },
+    "deliverability": {
+        "team_member": TEAM_MEMBERS["chetan"],
+        "keywords": ["deliverability", "inbox", "spam", "email signature", "bounce", "sender", "domain", "infrastructure"]
+    },
+    "automation": {
+        "team_member": TEAM_MEMBERS["suraj"],
+        "keywords": ["automation", "autoresponder", "auto reply", "cc", "forward", "clever responder", "automated"]
+    }
 }
 
-# --- SLACK EVENT HANDLERS ---
+def detect_question_type(message_text):
+    """Detect question type for routing"""
+    message_lower = message_text.lower()
+    
+    for category, config in QUESTION_ROUTING.items():
+        if any(keyword in message_lower for keyword in config["keywords"]):
+            return config["team_member"], category
+    
+    return DEFAULT_HANDOFF, "general"
 
-# Welcome message for new members
+# ============================================
+# HELPER FUNCTIONS
+# ============================================
+
+def is_internal_team_member(user_id):
+    return user_id in INTERNAL_TEAM_IDS
+
+def format_link(url, text):
+    return f"<{url}|{text}>"
+
+def has_team_replied_in_thread(channel_id, thread_ts):
+    try:
+        result = bot.client.conversations_replies(channel=channel_id, ts=thread_ts)
+        if not result["ok"]:
+            return False
+        
+        messages = result.get("messages", [])
+        for msg in messages[1:]:
+            user_id = msg.get("user")
+            if user_id and is_internal_team_member(user_id):
+                return True
+        return False
+    except Exception as e:
+        print(f"Error checking thread replies: {e}")
+        return False
+
+def get_thread_key(channel_id, thread_ts):
+    return f"{channel_id}:{thread_ts}"
+
+def is_actual_question(message_text):
+    """
+    Determine if message is ACTUALLY a question
+    Not just a statement with keywords
+    """
+    message_lower = message_text.lower().strip()
+    
+    # Must have question mark OR question words
+    has_question_mark = "?" in message_text
+    
+    # Question starter words
+    question_starters = [
+        "how", "what", "when", "where", "why", "who", "which",
+        "can you", "could you", "would you", "do you", "does", "did",
+        "is there", "are there", "will you", "have you", "has",
+        "am i", "are we", "is it", "should i", "should we"
+    ]
+    
+    starts_with_question = any(message_lower.startswith(starter) for starter in question_starters)
+    
+    return has_question_mark or starts_with_question
+
+# ============================================
+# FAQ RESPONSES - ACTUAL QUESTIONS ONLY
+# ============================================
+
+FAQ_DATABASE = [
+    {
+        "question_patterns": [
+            "how can i see reporting",
+            "how do i see the report",
+            "where is the report",
+            "how can i check performance",
+            "how do i check the numbers",
+            "where can i see results",
+            "how to see campaign performance",
+            "where are the metrics"
+        ],
+        "answer": "You can see reporting in a few ways:\n• Weekly performance summaries posted here every Friday\n• Monthly detailed reports on the 1st of each month\n• Live reports via the Google Sheets link we share\n\nWant access to the live dashboard or need specific numbers? The team can help!",
+        "category": "campaigns"
+    },
+    {
+        "question_patterns": [
+            "can't login",
+            "cannot login",
+            "can't access dashboard",
+            "login not working",
+            "how do i login",
+            "how to access dashboard",
+            "forgot password",
+            "need login credentials",
+            "dashboard login"
+        ],
+        "answer": "For dashboard access issues:\n• Check your email for the original login credentials\n• Make sure you're using the correct dashboard URL\n• Try resetting your password\n\nThe team can resend credentials or help you get access!",
+        "category": "general"
+    },
+    {
+        "question_patterns": [
+            "how many emails sent",
+            "how many emails have we sent",
+            "what's the email volume",
+            "total emails sent",
+            "email send count",
+            "how many sent this month"
+        ],
+        "answer": "Email send volumes are included in:\n• Weekly summaries (posted Fridays)\n• Monthly reports (1st of month)\n• The live Google Sheets report\n\nWant the current count? The team can pull exact numbers for you!",
+        "category": "campaigns"
+    },
+    {
+        "question_patterns": [
+            "why so low",
+            "why are results low",
+            "why only few responses",
+            "why not more replies",
+            "response rate low",
+            "why so few positives"
+        ],
+        "answer": "Low response rates can happen due to several factors:\n• List quality and targeting\n• Messaging and positioning\n• Deliverability issues\n• Industry/timing seasonality\n\nThe team will analyze your specific campaign and identify what to optimize!",
+        "category": "campaigns"
+    },
+    {
+        "question_patterns": [
+            "when will campaign launch",
+            "when does it go live",
+            "when will we start",
+            "launch timeline",
+            "when will it begin",
+            "how long until launch"
+        ],
+        "answer": "New campaigns typically launch within 3-5 business days after strategy is finalized. We'll notify you right here in this channel once it's live!",
+        "category": "campaigns"
+    },
+    {
+        "question_patterns": [
+            "how do i respond to leads",
+            "how to reply to leads",
+            "where do i respond",
+            "how to answer positive replies",
+            "where is master inbox",
+            "how to access inbox"
+        ],
+        "answer": "To respond to positive leads:\n1. Access your Master Inbox via the dashboard\n2. All positive replies are automatically funneled there\n3. Click any conversation to reply directly\n\nYou can also respond from your email when we CC you on replies!",
+        "category": "campaigns"
+    },
+    {
+        "question_patterns": [
+            "can we pause",
+            "how to stop campaign",
+            "need to pause",
+            "can we turn off",
+            "stop sending",
+            "deactivate campaign"
+        ],
+        "answer": "To pause a campaign, just let the team know which specific campaign you'd like to pause. We'll deactivate it within 24 hours and confirm here!",
+        "category": "campaigns"
+    },
+    {
+        "question_patterns": [
+            "can we change targeting",
+            "who are we targeting",
+            "can we target different audience",
+            "change the icp",
+            "target different people",
+            "who should we reach"
+        ],
+        "answer": "We target based on the ICP established during onboarding. Want to refine targeting or test a new audience? Use the `/new-campaign` command or discuss with the team!",
+        "category": "targeting"
+    },
+    {
+        "question_patterns": [
+            "can we change the copy",
+            "update the messaging",
+            "change email copy",
+            "new message",
+            "different copy",
+            "revise the emails"
+        ],
+        "answer": "All email copy is written and reviewed by our team. Want to test new messaging or update copy? The team can walk you through the process and implement changes!",
+        "category": "copy"
+    },
+    {
+        "question_patterns": [
+            "emails going to spam",
+            "landing in spam",
+            "deliverability issue",
+            "not landing in inbox",
+            "emails not delivered",
+            "spam folder"
+        ],
+        "answer": "We actively monitor deliverability with regular infrastructure updates and optimization. If you're noticing delivery issues, the team will investigate immediately and make adjustments!",
+        "category": "deliverability"
+    }
+]
+
+def find_faq_match(message_text):
+    """
+    Match message to FAQ - ONLY if it's actually a question
+    """
+    # First check: Is this even a question?
+    if not is_actual_question(message_text):
+        return None
+    
+    message_lower = message_text.lower()
+    
+    # Check each FAQ's question patterns
+    for faq in FAQ_DATABASE:
+        for pattern in faq["question_patterns"]:
+            # Check if the pattern is in the question
+            if pattern in message_lower:
+                return {
+                    "answer": faq["answer"],
+                    "category": faq["category"]
+                }
+    
+    return None
+
+# Meeting keywords
+MEETING_KEYWORDS = [
+    "call", "meeting", "schedule", "connect", "talk", "discuss",
+    "zoom", "meet", "chat", "catch up", "sync", "block time",
+    "block a time", "find time", "available", "free time", "calendly",
+    "book", "booking", "appointment", "slot", "when can we", "can we meet",
+    "let's talk", "get on a call", "hop on", "quick call", "quick chat"
+]
+
+# ============================================
+# WELCOME MESSAGES
+# ============================================
+
 @bot.event("member_joined_channel")
 def welcome_message(event, say):
     user_id = event["user"]
     channel_id = event["channel"]
-    channel_name = ""
-
-    # Fetch channel info to get the name
+    
+    if is_internal_team_member(user_id):
+        return
+    
     try:
         channel_info = bot.client.conversations_info(channel=channel_id)
-        if channel_info["ok"]:
-            channel_name = channel_info["channel"]["name"]
+        if not channel_info["ok"]:
+            return
+        channel_name = channel_info["channel"]["name"]
     except Exception as e:
         print(f"Error fetching channel info: {e}")
         return
-
-    # Customize message based on the channel
-    if "live_responses" in channel_name:
-        text = f"Welcome <@{user_id}>! This channel is for real-time notifications of all positive replies from our campaigns. You can monitor lead activity here."
-    else:
+    
+    if "live_responses" in channel_name or "live-responses" in channel_name:
         text = (
-            f"Welcome <@{user_id}>! This is your primary communication channel with the CleverViral team. "
-            f"Here we'll discuss strategy, share updates, and collaborate on your campaigns.\n\n"
-            f"A few quick links to get you started:\n"
-            f"• Access your Dashboard & Master Inbox: https://gtm.cleverviral.co\n"
-            f"• To suggest a new campaign, just type `/new-campaign`"
+            f"Welcome <@{user_id}>! 👋\n\n"
+            f"This channel is for **real-time notifications** of all positive replies from your campaigns. "
+            f"You can respond to leads via your Master Inbox."
+        )
+    else:
+        calendly_link = format_link(CALENDLY_LINK, "book a call")
+        text = (
+            f"Welcome <@{user_id}>! 👋\n\n"
+            f"This is your primary communication channel with the CleverViral team. "
+            f"We'll discuss strategy, share updates, and collaborate on campaigns here.\n\n"
+            f"**Quick actions:**\n"
+            f"• To suggest a new campaign: `/new-campaign`\n"
+            f"• To {calendly_link} with the team\n\n"
+            f"I'm your CX bot - ask me anything! 🤖"
         )
     
     say(text=text)
 
-# Respond to messages containing keywords (FAQs)
+# ============================================
+# MESSAGE HANDLER
+# ============================================
+
 @bot.message(".*")
-def handle_message(message, say):
-    user_message = message["text"].lower()
+def handle_message(message, say, client):
+    """Handle messages - only respond to ACTUAL questions"""
     
-    # Find a matching FAQ keyword
-    for keyword, response in faq_responses.items():
-        if keyword in user_message:
-            say(text=response, thread_ts=message["ts"])
-            return # Stop after the first match
-
-    # If no keyword is found, handoff to a human
-    # This part is simple now, could be improved with sentiment analysis in V2
-    # Avoids replying to its own messages or other bot messages
-    if "bot_id" not in message:
-        handoff_text = (
-            f"I'm not sure how to answer that. Let me loop in the team for you. "
-            f"<@{HANDOFF_TEAM_MEMBER_ID}> will get back to you shortly."
+    if "bot_id" in message:
+        return
+    
+    user_id = message.get("user")
+    message_text = message.get("text", "")
+    message_ts = message.get("ts")
+    channel_id = message.get("channel")
+    thread_ts = message.get("thread_ts", message_ts)
+    
+    # Ignore internal team
+    if is_internal_team_member(user_id):
+        print(f"Ignoring message from team member: {user_id}")
+        return
+    
+    # Check if thread already handled
+    thread_key = get_thread_key(channel_id, thread_ts)
+    if thread_key in handled_threads:
+        print(f"Thread already handled: {thread_key}")
+        return
+    
+    # Check if team already replied in thread
+    if thread_ts != message_ts:
+        if has_team_replied_in_thread(channel_id, thread_ts):
+            print(f"Team already replied in thread: {thread_key}")
+            handled_threads.add(thread_key)
+            return
+    
+    # CRITICAL: Only proceed if this is actually a question
+    if not is_actual_question(message_text):
+        print(f"Not a question, ignoring: {message_text[:50]}")
+        return
+    
+    # React with hourglass
+    try:
+        client.reactions_add(
+            channel=channel_id,
+            timestamp=message_ts,
+            name="hourglass_flowing_sand"
         )
-        say(text=handoff_text, thread_ts=message["ts"])
+    except Exception as e:
+        print(f"Error adding reaction: {e}")
+    
+    handled_threads.add(thread_key)
+    
+    # Detect question type for routing
+    team_member_id, question_category = detect_question_type(message_text)
+    
+    # Check for meeting keywords FIRST
+    message_lower = message_text.lower()
+    if any(keyword in message_lower for keyword in MEETING_KEYWORDS):
+        calendly_link = format_link(CALENDLY_LINK, "here")
+        text = (
+            f"Got it <@{user_id}>! 📅\n\n"
+            f"You can book a time {calendly_link}. Looping in <@{team_member_id}> as well!"
+        )
+        
+        try:
+            client.reactions_remove(channel=channel_id, timestamp=message_ts, name="hourglass_flowing_sand")
+            client.reactions_add(channel=channel_id, timestamp=message_ts, name="white_check_mark")
+        except:
+            pass
+        
+        say(text=text, thread_ts=thread_ts)
+        return
+    
+    # Check for FAQ match
+    faq_match = find_faq_match(message_text)
+    if faq_match:
+        answer = faq_match.get("answer", "")
+        faq_category = faq_match.get("category", "general")
+        
+        # Get appropriate team member based on FAQ category
+        if faq_category != "general":
+            for cat_name, cat_config in QUESTION_ROUTING.items():
+                if cat_name == faq_category:
+                    team_member_id = cat_config["team_member"]
+                    break
+        
+        text = (
+            f"{answer}\n\n"
+            f"Looping in <@{team_member_id}> to provide any additional details! 👍"
+        )
+        
+        try:
+            client.reactions_remove(channel=channel_id, timestamp=message_ts, name="hourglass_flowing_sand")
+            client.reactions_add(channel=channel_id, timestamp=message_ts, name="white_check_mark")
+        except:
+            pass
+        
+        say(text=text, thread_ts=thread_ts)
+        return
+    
+    # No FAQ match - escalate
+    text = (
+        f"Got it <@{user_id}>! 👍\n\n"
+        f"Looping in <@{team_member_id}> to answer this one."
+    )
+    
+    try:
+        client.reactions_remove(channel=channel_id, timestamp=message_ts, name="hourglass_flowing_sand")
+        client.reactions_add(channel=channel_id, timestamp=message_ts, name="eyes")
+    except:
+        pass
+    
+    say(text=text, thread_ts=thread_ts)
 
-
-# --- SLACK COMMAND HANDLERS ---
+# ============================================
+# SLASH COMMANDS
+# ============================================
 
 @bot.command("/new-campaign")
 def handle_new_campaign(ack, body, say):
     ack()
     user_id = body["user_id"]
+    
+    form_link = format_link(NOTION_FORM_LINK, "this campaign form")
     text = (
-        f"Hi <@{user_id}>! That's great you have a new idea. To make sure we capture all the necessary details, "
-        f"please fill out this brief form:\n{NOTION_FORM_LINK}"
+        f"Hey <@{user_id}>! 🚀\n\n"
+        f"Great idea! Please fill out {form_link} with your campaign details. "
+        f"We'll review and get back to you within 3-5 business days!"
     )
     say(text=text)
 
-
-# --- N8N WEBHOOK ENDPOINT (FOR V1 TRANSCRIPT SUMMARY) ---
-# This endpoint will be called by your N8N workflow
+# ============================================
+# N8N WEBHOOK
+# ============================================
 
 @app.route("/n8n/transcript-summary", methods=["POST"])
 def n8n_transcript_summary():
     data = request.json
     
-    # Ensure data from N8N is valid
     if not data or "summary" not in data or "channel" not in data:
-        return jsonify({"status": "error", "message": "Invalid payload. 'summary' and 'channel' are required."}, 400)
-
+        return jsonify({"status": "error", "message": "Invalid payload"}), 400
+    
     summary = data["summary"]
-    target_channel = data["channel"] # e.g., "testclient-cxcleverviral"
-
+    target_channel = data["channel"]
+    
     try:
-        # Post the summary to the specified Slack channel
         bot.client.chat_postMessage(
             channel=target_channel,
-            text=f"📄 Here's a summary of the recent client call:\n\n{summary}"
+            text=f"📞 **Call Summary**\n\n{summary}"
         )
         return jsonify({"status": "success"}), 200
     except Exception as e:
         print(f"Error posting to Slack: {e}")
-        return jsonify({"status": "error", "message": f"Failed to post to Slack: {e}"}), 500
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-# --- FLASK APP ROUTES ---
+# ============================================
+# FLASK ROUTES
+# ============================================
 
-# Health check endpoint
 @app.route("/health", methods=["GET"])
 def health_check():
     return "Bot is running! 🤖", 200
 
-# Entry point for all Slack events
 @app.route("/slack/events", methods=["POST"])
 def slack_events():
     return handler.handle(request)
 
-# Entry point for all Slack commands
 @app.route("/slack/commands", methods=["POST"])
 def slack_commands():
     return handler.handle(request)
 
+# ============================================
+# STARTUP
+# ============================================
 
-# --- APP STARTUP ---
 if __name__ == "__main__":
-    # The port is important for Render
+    print("🤖 CleverViral CX Bot is starting...")
+    print("✅ Bot is ready and listening for events!")
+    
     port = int(os.environ.get("PORT", 3000))
     app.run(host="0.0.0.0", port=port)
