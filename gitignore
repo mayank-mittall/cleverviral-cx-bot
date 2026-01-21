@@ -1,0 +1,12 @@
+# Don't commit environment variables
+.env
+.env.local
+
+# Don't commit Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Don't commit IDE files
+.vscode/
+.idea/
