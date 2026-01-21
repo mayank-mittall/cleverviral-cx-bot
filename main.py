@@ -333,7 +333,7 @@ MEETING_KEYWORDS = [
 
 @bot.command("/pip-onboard")
 def handle_onboard_main(ack, say, command):
-    """Team uses this to send main channel welcome"""
+    """Team uses this to send main channel welcome - tags all external stakeholders"""
     ack()
     
     # Only team members can use this
@@ -342,9 +342,28 @@ def handle_onboard_main(ack, say, command):
         say("This command is only available to the CleverViral team.", ephemeral=True)
         return
     
+    channel_id = command["channel_id"]
+    
+    # Get all channel members
+    try:
+        result = bot.client.conversations_members(channel=channel_id)
+        all_members = result.get("members", [])
+        
+        # Filter to only external stakeholders (non-team members)
+        external_members = [member_id for member_id in all_members if not is_internal_team_member(member_id)]
+        
+        # Create @mentions for all external stakeholders
+        if external_members:
+            welcome_mentions = " ".join([f"<@{member_id}>" for member_id in external_members])
+        else:
+            welcome_mentions = "Welcome"
+    except Exception as e:
+        print(f"Error getting channel members: {e}")
+        welcome_mentions = "Welcome"
+    
     calendly_link = format_link(CALENDLY_LINK, "book a call")
     text = (
-        f"Welcome.\n\n"
+        f"{welcome_mentions}\n\n"
         f"This is your primary channel with the CleverViral team. "
         f"We'll discuss strategy, share updates, and collaborate on campaigns here.\n\n"
         f"**Quick actions:**\n"
@@ -357,7 +376,7 @@ def handle_onboard_main(ack, say, command):
 
 @bot.command("/pip-onboard-live")
 def handle_onboard_live(ack, say, command):
-    """Team uses this to send live_responses welcome"""
+    """Team uses this to send live_responses welcome - tags all external stakeholders"""
     ack()
     
     # Only team members can use this
@@ -366,8 +385,27 @@ def handle_onboard_live(ack, say, command):
         say("This command is only available to the CleverViral team.", ephemeral=True)
         return
     
+    channel_id = command["channel_id"]
+    
+    # Get all channel members
+    try:
+        result = bot.client.conversations_members(channel=channel_id)
+        all_members = result.get("members", [])
+        
+        # Filter to only external stakeholders
+        external_members = [member_id for member_id in all_members if not is_internal_team_member(member_id)]
+        
+        # Create @mentions for all external stakeholders
+        if external_members:
+            welcome_mentions = " ".join([f"<@{member_id}>" for member_id in external_members])
+        else:
+            welcome_mentions = "Welcome"
+    except Exception as e:
+        print(f"Error getting channel members: {e}")
+        welcome_mentions = "Welcome"
+    
     text = (
-        f"Welcome.\n\n"
+        f"{welcome_mentions}\n\n"
         f"This channel shows real-time notifications of positive replies from your campaigns. "
         f"You can respond to leads via your Master Inbox (accessible from your dashboard).\n\n"
         f"We'll notify you here whenever someone shows interest."
